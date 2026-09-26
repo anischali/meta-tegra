@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anis Chali <anis.chali@ro-main.com>
+Date: Sat, 26 Sep 2026 14:48:50 +0200
+Subject: [PATCH] tegrasign: read SoftHSM connection settings from the
+ environment
+
+tegrasign_v3_softhsm.py hardcodes the PKCS#11 module path, token label
+and user PIN used for --hsm signing, expecting OEMs to edit the file.
+That doesn't work for build systems, which ship the file unmodified
+and need to point signing at their own PKCS#11 module and token.
+
+Read the settings from the TEGRASIGN_HSM_LIB_PATH,
+TEGRASIGN_HSM_TOKEN_LABEL and TEGRASIGN_HSM_USER_PIN environment
+variables when they are set, falling back to the original defaults
+otherwise. TEGRASIGN_HSM_USER_PIN_FILE can name a file holding the PIN
+instead, to keep it out of the environment of every process.
+
+Also fix the error path in tegrasign_v3_util.py when the HSM can't be
+reached: hsm_get_pkc_key_type() then returns None, and concatenating
+it to the message raised a TypeError that hid the actual problem.
+
+Upstream-Status: Inappropriate [OE specific]
+Signed-off-by: Anis Chali <anis.chali@ro-main.com>
+---
+ bootloader/tegrasign_v3_softhsm.py | 20 ++++++++++++++++----
+ bootloader/tegrasign_v3_util.py    |  2 +-
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/bootloader/tegrasign_v3_softhsm.py b/bootloader/tegrasign_v3_softhsm.py
+index 8f5dc05d4d33..d332d75044a3 100755
+--- a/bootloader/tegrasign_v3_softhsm.py
++++ b/bootloader/tegrasign_v3_softhsm.py
+@@ -92,10 +92,22 @@ hsm_user_pin = "1234" # The user pin number to access the token and the keys.
+ 
+ '''
+ 
+-# These are env setup variables for SoftHSM connection
+-hsm_token_label = "HSM"
+-hsm_lib_path = "/usr/lib/softhsm/libsofthsm2.so"
+-hsm_user_pin = "1234"
++# These are env setup variables for SoftHSM connection. Each one can be
++# overridden from the environment, so that a build system can point
++# signing at its own PKCS#11 module and token without editing this file.
++def _hsm_user_pin_from_env(default):
++    pin = os.environ.get('TEGRASIGN_HSM_USER_PIN')
++    if pin:
++        return pin
++    pin_file = os.environ.get('TEGRASIGN_HSM_USER_PIN_FILE')
++    if pin_file:
++        with open(pin_file) as f:
++            return f.read().rstrip('\r\n')
++    return default
++
++hsm_token_label = os.environ.get('TEGRASIGN_HSM_TOKEN_LABEL') or "HSM"
++hsm_lib_path = os.environ.get('TEGRASIGN_HSM_LIB_PATH') or "/usr/lib/softhsm/libsofthsm2.so"
++hsm_user_pin = _hsm_user_pin_from_env("1234")
+ 
+ # DER encoding related constants
+ DER_OCTET_STRING_TAG = 0x04
+diff --git a/bootloader/tegrasign_v3_util.py b/bootloader/tegrasign_v3_util.py
+index a23ff36b42ea..408a5f2ce5f5 100755
+--- a/bootloader/tegrasign_v3_util.py
++++ b/bootloader/tegrasign_v3_util.py
+@@ -228,7 +228,7 @@ class HSM:
+                 elif pkc_key_type == 'ECC521':
+                     self.type = KeyType.ECC521
+                 else:
+-                    raise tegrasign_exception('Unknown HSM PKC key type: ' + pkc_key_type)
++                    raise tegrasign_exception('Unknown HSM PKC key type: ' + str(pkc_key_type))
+             elif 'ALGO' in arg:
+                 self.algo_only = True
+             elif 'REVOKE' in arg:

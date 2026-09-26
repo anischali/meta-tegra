@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anis Chali <anis.chali@ro-main.com>
+Date: Sat, 26 Sep 2026 14:50:27 +0200
+Subject: [PATCH] BaseTools/GenerateCapsule: add --signer-private-key option
+
+SignPayloadOpenSsl() signs with "openssl smime -sign -signer <file>"
+and no -inkey, so the signer private key has to be stored in the same
+PEM file as the signer certificate. That rules out keys that can't be
+exported to a file, such as keys held in an HSM.
+
+Add an optional --signer-private-key argument, passed to openssl as
+-inkey. It accepts a file name, or any URI that an OpenSSL 3 provider
+can resolve, such as a PKCS#11 URI handled by pkcs11-provider. With
+it, --signer-private-cert only needs to hold the certificate. The
+value is shell-quoted, since the command runs through the shell and
+URIs may contain metacharacters, and any PIN in it is masked in the
+verbose output. Behavior is unchanged when the option is omitted.
+
+Upstream-Status: Pending
+Signed-off-by: Anis Chali <anis.chali@ro-main.com>
+---
+ .../Source/Python/Capsule/GenerateCapsule.py  | 38 ++++++++++++++++---
+ 1 file changed, 32 insertions(+), 6 deletions(-)
+
+diff --git a/BaseTools/Source/Python/Capsule/GenerateCapsule.py b/BaseTools/Source/Python/Capsule/GenerateCapsule.py
+index fd3ee4a614db..e22e4af6b66c 100644
+--- a/BaseTools/Source/Python/Capsule/GenerateCapsule.py
++++ b/BaseTools/Source/Python/Capsule/GenerateCapsule.py
+@@ -28,6 +28,8 @@ import tempfile
+ import shutil
+ import platform
+ import json
++import re
++import shlex
+ from Common.Uefi.Capsule.UefiCapsuleHeader import UefiCapsuleHeaderClass
+ from Common.Uefi.Capsule.FmpCapsuleHeader  import FmpCapsuleHeaderClass
+ from Common.Uefi.Capsule.FmpAuthHeader     import FmpAuthHeaderClass
+@@ -169,7 +171,7 @@ def VerifyPayloadSignTool (Payload, CertData, ToolPath, PfxFile, SubjectName, Ha
+     print ('signtool verify is not supported.')
+     raise ValueError ('GenerateCapsule: error: signtool verify is not supported.')
+ 
+-def SignPayloadOpenSsl (Payload, ToolPath, SignerPrivateCertFile, OtherPublicCertFile, TrustedPublicCertFile, HashAlgorithm = DEFAULT_HASH_ALGORITHM, Verbose = False):
++def SignPayloadOpenSsl (Payload, ToolPath, SignerPrivateCertFile, OtherPublicCertFile, TrustedPublicCertFile, HashAlgorithm = DEFAULT_HASH_ALGORITHM, Verbose = False, SignerPrivateKey = None):
+     #
+     # Check the hash algorithm is supported
+     #
+@@ -183,9 +185,22 @@ def SignPayloadOpenSsl (Payload, ToolPath, SignerPrivateCertFile, OtherPublicCer
+     Command = ''
+     Command = Command + '"{Path}" '.format (Path = os.path.join (ToolPath, 'openssl'))
+     Command = Command + 'smime -sign -binary -outform DER -md {HashAlgorithm} '.format (HashAlgorithm = HashAlgorithm)
+-    Command = Command + '-signer "{Private}" -certfile "{Public}"'.format (Private = SignerPrivateCertFile, Public = OtherPublicCertFile)
++    Command = Command + '-signer "{Private}" '.format (Private = SignerPrivateCertFile)
++    if SignerPrivateKey:
++        #
++        # Private key kept apart from the signer certificate, either as a
++        # file or as a URI that an OpenSSL 3 provider resolves, such as a
++        # PKCS#11 URI for a key held in an HSM. The command runs through the
++        # shell, so quote the value: URIs may contain shell metacharacters.
++        #
++        if os.name == 'posix':
++            Key = shlex.quote (SignerPrivateKey)
++        else:
++            Key = '"{Key}"'.format (Key = SignerPrivateKey)
++        Command = Command + '-inkey {Key} '.format (Key = Key)
++    Command = Command + '-certfile "{Public}"'.format (Public = OtherPublicCertFile)
+     if Verbose:
+-        print (Command)
++        print (re.sub (r'(pin-value=)[^;&\'" ]*', r'\1***', Command))
+ 
+     #
+     # Sign the input file using the specified private key and capture signature from STDOUT
+@@ -488,6 +503,9 @@ if __name__ == '__main__':
+         if args.OpenSslSignerPrivateCertFile:
+             print ('GenerateCapsule: error: Argument --signer-private-cert conflicts with Argument -j')
+             sys.exit (1)
++        if args.OpenSslSignerPrivateKey:
++            print ('GenerateCapsule: error: Argument --signer-private-key conflicts with Argument -j')
++            sys.exit (1)
+         if args.OpenSslOtherPublicCertFile:
+             print ('GenerateCapsule: error: Argument --other-public-cert conflicts with Argument -j')
+             sys.exit (1)
+@@ -514,7 +532,8 @@ if __name__ == '__main__':
+                      OpenSslOtherPublicCertFile   = None,
+                      OpenSslTrustedPublicCertFile = None,
+                      SigningToolPath              = None,
+-                     DepexExp                     = None
++                     DepexExp                     = None,
++                     OpenSslSignerPrivateKey      = None
+                      ):
+             self.Payload                      = Payload
+             self.Guid                         = Guid
+@@ -531,6 +550,7 @@ if __name__ == '__main__':
+             self.OpenSslTrustedPublicCertFile = OpenSslTrustedPublicCertFile
+             self.SigningToolPath              = SigningToolPath
+             self.DepexExp                     = DepexExp
++            self.OpenSslSignerPrivateKey      = OpenSslSignerPrivateKey
+ 
+             self.UseSignTool = (self.SignToolPfxFile is not None or
+                                 self.SignToolSubjectName is not None)
+@@ -650,7 +670,8 @@ if __name__ == '__main__':
+                                             args.OpenSslOtherPublicCertFile,
+                                             args.OpenSslTrustedPublicCertFile,
+                                             args.SigningToolPath,
+-                                            None
++                                            None,
++                                            args.OpenSslSignerPrivateKey
+                                             ))
+         for SinglePayloadDescriptor in PayloadDescriptorList:
+             try:
+@@ -700,7 +721,8 @@ if __name__ == '__main__':
+                             SinglePayloadDescriptor.OpenSslOtherPublicCertFile,
+                             SinglePayloadDescriptor.OpenSslTrustedPublicCertFile,
+                             HashAlgorithm = SinglePayloadDescriptor.HashAlgorithm,
+-                            Verbose = args.Verbose
++                            Verbose = args.Verbose,
++                            SignerPrivateKey = SinglePayloadDescriptor.OpenSslSignerPrivateKey
+                         )
+                 except Exception as Msg:
+                     print ('GenerateCapsule: error: can not sign payload \n' + str(Msg))
+@@ -1089,6 +1111,10 @@ if __name__ == '__main__':
+ 
+     parser.add_argument ("--signer-private-cert", dest='OpenSslSignerPrivateCertFile', type=argparse.FileType('rb'),
+                          help="OpenSSL signer private certificate filename.")
++    parser.add_argument ("--signer-private-key", dest='OpenSslSignerPrivateKey', type=str, default=None,
++                         help="OpenSSL signer private key filename or URI (for example a PKCS#11 URI resolved "
++                              "by an OpenSSL 3 provider). If omitted, the private key must be included in the "
++                              "--signer-private-cert file.")
+     parser.add_argument ("--other-public-cert", dest='OpenSslOtherPublicCertFile', type=argparse.FileType('rb'),
+                          help="OpenSSL other public certificate filename.")
+     parser.add_argument ("--trusted-public-cert", dest='OpenSslTrustedPublicCertFile', type=argparse.FileType('rb'),

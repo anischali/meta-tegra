@@ -46,14 +46,62 @@ fix_boot_timeout() {
 }
 do_patch[postfuncs] += "${@'fix_boot_timeout' if bb.utils.to_boolean(d.getVar('TEGRA_MINIMAL_BOOT')) else ''}"
 
+# When TEGRA_UEFI_CAPSULE_TRUSTED_CERT is set, UEFI trusts that root
+# certificate for capsule signatures instead of the EDK2 test certificate.
+TEGRA_UEFI_CAPSULE_TRUSTED_CERT ??= ""
+TEGRA_UEFI_CAPSULE_TRUSTED_CERT[vardepvalue] = "${@oe4t.pkcs11.redact(d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT'))}"
+DEPENDS += "${@'openssl-native' if d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT') else ''}"
+
+def tegra_fmp_trusted_cert_checksums(d):
+    cert = d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT')
+    if not cert or oe4t.pkcs11.is_uri(cert):
+        return ''
+    return '${TEGRA_UEFI_CAPSULE_TRUSTED_CERT}:True'
+
+do_configure[file-checksums] += "${@tegra_fmp_trusted_cert_checksums(d)}"
+
+python () {
+    # The value is placed in single quotes in tegra_fmp_trusted_cert_config
+    if oe4t.pkcs11.is_uri(d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT')):
+        oe4t.pkcs11.check_uri(d, 'TEGRA_UEFI_CAPSULE_TRUSTED_CERT')
+}
+
+# Converts TEGRA_UEFI_CAPSULE_TRUSTED_CERT, a PEM file or a PKCS#11 URI,
+# into the PCD include file for the FMP PKCS7 certificate buffer, and
+# writes a Kconfig fragment to $1 that has the UEFI build use it.
+tegra_fmp_trusted_cert_config() {
+    local cfgdir=${B}/nvidia-config/Tegra/${EDK2_PLATFORM}
+    local cert='${TEGRA_UEFI_CAPSULE_TRUSTED_CERT}'
+
+    case "$cert" in
+        pkcs11:*)
+            openssl storeutl -certs "$cert" | openssl x509 -outform DER -out $cfgdir/fmp-trusted-cert.cer
+            ;;
+        *)
+            openssl x509 -in "$cert" -outform DER -out $cfgdir/fmp-trusted-cert.cer
+            ;;
+    esac || bbfatal "Failed to read the capsule trusted certificate TEGRA_UEFI_CAPSULE_TRUSTED_CERT"
+    ${PYTHON} ${S}/BaseTools/Scripts/BinToPcd.py -i $cfgdir/fmp-trusted-cert.cer -o $cfgdir/fmp-trusted-cert.inc \
+        -p gFmpDevicePkgTokenSpaceGuid.PcdFmpDevicePkcs7CertBufferXdr -x
+    cat > "$1" <<EOF
+CONFIG_FMP_CERTIFICATES_PRODUCTION_FILE=y
+CONFIG_FMP_CERTIFICATES_PRODUCTION_FILE_PATH="$cfgdir/fmp-trusted-cert.inc"
+EOF
+}
 
 do_configure:append() {
+    extracfg=
     if [ -n "${TEGRA_UEFI_SYSTEM_IMAGE_TYPE_GUID}" ]; then
         echo 'CONFIG_FMP_SYSTEM_IMAGE_TYPE_ID="${TEGRA_UEFI_SYSTEM_IMAGE_TYPE_GUID}"' > ${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/image_type_id_override.cfg
         extracfg=${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/image_type_id_override.cfg
     else
        rm -f ${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/image_type_id_override.cfg
-       extracfg=
+    fi
+    if [ -n '${TEGRA_UEFI_CAPSULE_TRUSTED_CERT}' ]; then
+        tegra_fmp_trusted_cert_config ${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/fmp_certificates_override.cfg
+        extracfg="$extracfg ${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/fmp_certificates_override.cfg"
+    else
+        rm -f ${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/fmp_certificates_override.cfg
     fi
     ${PYTHON} ${UNPACKDIR}/nvbuildconfig.py --kconfig-path=${S_EDK2_NVIDIA}/Platform/NVIDIA/Kconfig --output-dir=${B}/nvidia-config/Tegra/${EDK2_PLATFORM} ${S_EDK2_NVIDIA}/Platform/NVIDIA/Tegra/DefConfigs/${EDK2_PLATFORM}.defconfig ${@config_fragments(d)} $extracfg
     . ${B}/nvidia-config/Tegra/${EDK2_PLATFORM}/.config

@@ -30,6 +30,26 @@ Note that with R35.2.1, the `--user_key` encryption key is used only for the XUS
 
 Build-time bootloader signing will be performed on the boot-related files in the `tegraflash` package for flashing, as well as the entries in any bootloader update payloads (BUPs).
 
+## Signing with keys held in an HSM (PKCS#11)
+The PKC and SBK keys can stay in an HSM or other PKCS#11 token instead of being
+available as files. Set `TEGRA_SIGNING_PKC` (and `TEGRA_SIGNING_SBK`, if you use one) to a
+[PKCS#11 URI](https://www.rfc-editor.org/rfc/rfc7512) for the token, rather than setting `TEGRA_SIGNING_ARGS`:
+```
+TEGRA_SIGNING_PKC = "pkcs11:token=my-token;object=PKC?module-path=/usr/lib/softhsm/libsofthsm2.so&pin-source=file:/path/to/pin.txt"
+TEGRA_SIGNING_SBK = "pkcs11:token=my-token;object=SBK"
+```
+The build then passes `--hsm` to NVIDIA's signing tools, which use their built-in PKCS#11 support
+(`tegrasign_v3_softhsm.py` in the L4T kit): the keys must be stored on the token with the labels `PKC` and `SBK`,
+whatever objects the URIs name. The module, token and PIN are taken from the `module-path`, `token` and `pin-value` or
+`pin-source` attributes of the `TEGRA_SIGNING_PKC` URI, and can be overridden directly with the `TEGRASIGN_HSM_LIB_PATH`,
+`TEGRASIGN_HSM_TOKEN_LABEL`, `TEGRASIGN_HSM_USER_PIN` and `TEGRASIGN_HSM_USER_PIN_FILE` variables. Prefer
+`pin-source` or `TEGRASIGN_HSM_USER_PIN_FILE` to `pin-value`, since a PIN given directly appears in the task
+scripts of the build. None of these settings are included in task signatures.
+
+HSM signing requires the `python3-pkcs11` recipe from the meta-python layer. If your PKCS#11 module reads its own
+environment variables (to locate a remote HSM, for example), export them to the build, for example with
+`export MY_HSM_SOCKET = "..."` in your `local.conf`.
+
 ## Post-build signing
 You can elect to perform bootloader signing outside of the build process by adding the `-u`, `-v`, and `--user_key` options when running the `doflash.sh` or `initrd-flash` script during flashing of your `tegraflash` package.  For BUP generation, add those options when running the `generate_bup_payload.sh` script to have the bootloader components signed.
 

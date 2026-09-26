@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anis Chali <anis.chali@ro-main.com>
+Date: Sat, 26 Sep 2026 14:49:05 +0200
+Subject: [PATCH] odmsign: quote key arguments before eval
+
+odmsign_ext_sign() appends "--key ${keyfile}" and
+"--encrypt_key ${sbk_keyfile}" unquoted to the signing command, which
+is then run through eval. eval re-parses the whole string, so shell
+metacharacters in a key argument are interpreted instead of being
+passed through.
+
+That breaks --hsm signing with a PKCS#11 URI as the key, such as
+"pkcs11:token=mytoken;object=PKC": the ';' ends the command early,
+and the rest of the URI is run as a separate command.
+
+Quote both arguments with printf %q so that eval sees each of them as
+a single word, whatever characters they contain.
+
+Upstream-Status: Pending
+Signed-off-by: Anis Chali <anis.chali@ro-main.com>
+---
+ bootloader/odmsign.func | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bootloader/odmsign.func b/bootloader/odmsign.func
+index 889a0023afef..5c0448eb770e 100644
+--- a/bootloader/odmsign.func
++++ b/bootloader/odmsign.func
+@@ -175,7 +175,7 @@ odmsign_ext_sign ()
+ 	# Sign binaries with PKC key
+ 	signcmd="./${flashappname} ${SIGNARGS} ";
+ 	if [ -n "${keyfile}" ]; then
+-		signcmd+="--key ${keyfile} "
++		signcmd+="--key $(printf '%q' "${keyfile}") "
+ 	fi
+ 
+ 	# Handle PKC only
+@@ -187,7 +187,7 @@ odmsign_ext_sign ()
+ 	fi;
+ 
+ 	# Sign binaries with both PKC and SBK keys
+-	signcmd+="--encrypt_key ${sbk_keyfile} ";
++	signcmd+="--encrypt_key $(printf '%q' "${sbk_keyfile}") ";
+ 	if [ "${disable_random_iv}" = "True" ]; then
+ 		echo "Disable random IV"
+ 		signcmd+="--disable_random_iv ";

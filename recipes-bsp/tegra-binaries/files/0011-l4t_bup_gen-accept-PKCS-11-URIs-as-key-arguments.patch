@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anis Chali <anis.chali@ro-main.com>
+Date: Sat, 26 Sep 2026 14:49:17 +0200
+Subject: [PATCH] l4t_bup_gen: accept PKCS#11 URIs as key arguments
+
+l4t_bup_gen() checks that the PKC and SBK key arguments are existing
+files before packaging the signed images. With --hsm signing the keys
+live on a PKCS#11 token and are passed as URIs, such as
+"pkcs11:token=mytoken;object=PKC", so the check always fails with
+"Error: No such file", even though the images were already signed
+successfully.
+
+Skip the file check for key arguments that are PKCS#11 URIs.
+
+Upstream-Status: Pending
+Signed-off-by: Anis Chali <anis.chali@ro-main.com>
+---
+ bootloader/l4t_bup_gen.func | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/bootloader/l4t_bup_gen.func b/bootloader/l4t_bup_gen.func
+index f804a6742ec9..d97818f6fc8d 100644
+--- a/bootloader/l4t_bup_gen.func
++++ b/bootloader/l4t_bup_gen.func
+@@ -743,8 +743,9 @@ function l4t_bup_gen()
+ 	# No PKC: the images are in signed/, file extention is .encrypt
+ 	# PKC: the images are in signed/, file extention is .signed
+ 	# PKC+SBK: the images are in enc_signed*/, file extention is encrypt.signed
++	# Keys given as PKCS#11 URIs (--hsm signing) are not local files.
+ 	if [ ! -z "${keyfile}" ]; then
+-		if [ ! -f "${keyfile}" ]; then
++		if [ ! -f "${keyfile}" ] && [ "${keyfile#pkcs11:}" = "${keyfile}" ]; then
+ 			echo "Error: No such file: '${OUT}/${keyfile}'."
+ 			exit 1
+ 		fi
+@@ -754,7 +755,7 @@ function l4t_bup_gen()
+ 
+ 		if [ ! -z "${sbk_keyfile}" ]; then
+ 			# PKC+SBK
+-			if [ ! -f "${sbk_keyfile}" ]; then
++			if [ ! -f "${sbk_keyfile}" ] && [ "${sbk_keyfile#pkcs11:}" = "${sbk_keyfile}" ]; then
+ 				echo "Error: No such file: '${OUT}/${sbk_keyfile}'."
+ 				exit 1
+ 			fi

@@ -8,6 +8,8 @@ LICENSE = "BSD-2-Clause-Patent"
 
 require edk2-firmware-core-tegra-39.2.1.inc
 
+SRC_URI += "file://0010-BaseTools-GenerateCapsule-add-signer-private-key-option.patch"
+
 inherit_defer native
 
 RDEPENDS:${PN} += "python3-core"

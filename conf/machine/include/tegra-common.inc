@@ -159,6 +159,10 @@ TEGRA_UEFI_SYSTEM_IMAGE_TYPE_GUID ?= ""
 TEGRA_UEFI_CAPSULE_ALT_IMAGE_TYPE_GUIDS ?= ""
 TEGRA_UEFI_FW_VERSION ?= "${@oe4t.uefi.get_hex_version(d.getVar('L4T_VERSION'))}"
 TEGRA_UEFI_LOWEST_SUPPORTED_VERSION ?= "${TEGRA_UEFI_FW_VERSION}"
+# Root certificate, as a PEM file or PKCS#11 URI, that UEFI trusts for
+# capsule signatures and that capsules are signed against. Empty means
+# the EDK2 test certificate, which must not be used in production.
+TEGRA_UEFI_CAPSULE_TRUSTED_CERT ?= ""
 
 USE_REDUNDANT_FLASH_LAYOUT_DEFAULT ??= "0"
 HAS_REDUNDANT_PARTITION_LAYOUT_EXTERNAL ?= "1"

@@ -44,18 +44,45 @@ def tegra_bootcontrol_overlay_list(d, bup=False, separator=','):
 
 def tegra_signing_filechecksums(d):
     files = []
-    if d.getVar('TEGRA_SIGNING_PKC'):
+    # PKCS#11 URIs name token objects, not local files that can be tracked
+    if d.getVar('TEGRA_SIGNING_PKC') and not oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_PKC')):
         files.append('${TEGRA_SIGNING_PKC}')
-    if d.getVar('TEGRA_SIGNING_SBK'):
+    if d.getVar('TEGRA_SIGNING_SBK') and not oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_SBK')):
         files.append('${TEGRA_SIGNING_SBK}')
     if len(files) == 0:
         return ''
     return ' '.join([f + ':True' for f in files])
 
+def tegra_signing_uses_pkcs11(d):
+    return oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_PKC')) or oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_SBK'))
+
+# With --hsm, tegraflash does not use the --key/--encrypt_key values for
+# signing: tegrasign looks up the "PKC" and "SBK" objects on the token
+# described by the TEGRASIGN_HSM_* variables exported below. The URIs are
+# still passed along, since the flash helper requires -u with --hsm, but
+# with the PIN stripped, as NVIDIA's scripts echo their command lines.
+def tegra_signing_pkcs11_args(d):
+    import bb
+
+    args = ' --hsm'
+    for var, opt in [('TEGRA_SIGNING_PKC', '-u'), ('TEGRA_SIGNING_SBK', '-v')]:
+        value = d.getVar(var)
+        if not value:
+            if var == 'TEGRA_SIGNING_PKC':
+                bb.fatal("TEGRA_SIGNING_SBK is a PKCS#11 URI, so TEGRA_SIGNING_PKC must be one too")
+            continue
+        if not oe4t.pkcs11.is_uri(value):
+            bb.fatal("%s must be a PKCS#11 URI: HSM signing applies to both the PKC and SBK keys" % var)
+        oe4t.pkcs11.check_uri(d, var)
+        args += " %s '%s'" % (opt, oe4t.pkcs11.without_pin(value))
+    return args
+
 def tegra_signing_args(d):
     import os
     import bb
 
+    if tegra_signing_uses_pkcs11(d):
+        return tegra_signing_pkcs11_args(d)
     args = ''
     pkc = d.getVar('TEGRA_SIGNING_PKC')
     if pkc:
@@ -82,6 +109,25 @@ TEGRA_SIGNING_FILECHECKSUMS ??= "${@tegra_signing_filechecksums(d)}"
 TEGRA_SIGNING_ENV ??= ""
 TEGRA_SIGNING_EXCLUDE_TOOLS ??= ""
 TEGRA_SIGNING_EXTRA_DEPS ??= ""
+
+# PKCS#11 token settings read by tegrasign_v3_softhsm.py (see the
+# tegra-flashtools patches), defaulted from TEGRA_SIGNING_PKC's module-path,
+# token, pin-value and pin-source attributes when it is a pkcs11: URI, and
+# overridable directly. Left out of task signatures like the key settings,
+# so the PIN never ends up in sstate metadata.
+export TEGRASIGN_HSM_LIB_PATH ??= "${@oe4t.pkcs11.uri_attr(d, 'TEGRA_SIGNING_PKC', 'module-path')}"
+TEGRASIGN_HSM_LIB_PATH[vardepvalue] = ""
+export TEGRASIGN_HSM_TOKEN_LABEL ??= "${@oe4t.pkcs11.uri_attr(d, 'TEGRA_SIGNING_PKC', 'token')}"
+TEGRASIGN_HSM_TOKEN_LABEL[vardepvalue] = ""
+export TEGRASIGN_HSM_USER_PIN ??= "${@oe4t.pkcs11.uri_attr(d, 'TEGRA_SIGNING_PKC', 'pin-value')}"
+TEGRASIGN_HSM_USER_PIN[vardepvalue] = ""
+export TEGRASIGN_HSM_USER_PIN_FILE ??= "${@oe4t.pkcs11.pin_file(d, 'TEGRA_SIGNING_PKC')}"
+TEGRASIGN_HSM_USER_PIN_FILE[vardepvalue] = ""
+TEGRA_SIGNING_PKCS11_DEPS = "${@'python3-pkcs11-native:do_populate_sysroot python3-cryptography-native:do_populate_sysroot' if tegra_signing_uses_pkcs11(d) else ''}"
+# tegrasign's HSM module imports python3-cryptography, which fails to
+# load if OpenSSL's legacy provider can't be found; it isn't needed there.
+export CRYPTOGRAPHY_OPENSSL_NO_LEGACY = "${@'1' if tegra_signing_uses_pkcs11(d) else ''}"
+
 DTB_EXTRA_DEPS ??= "${@tegra_dtb_extra_deps(d)}"
 EXTERNAL_KERNEL_DEVICETREE ??= "${@'${RECIPE_SYSROOT}/boot/devicetree' if d.getVar('PREFERRED_PROVIDER_virtual/dtb') else ''}"
 
@@ -565,7 +611,7 @@ do_image_tegraflash_tar[depends] += "dtc-native:do_populate_sysroot coreutils-na
                                  ${TEGRA_RCM_EDK2_DEPENDS} virtual/kernel:do_deploy \
                                  ${@'${INITRD_IMAGE}:do_image_complete' if d.getVar('INITRD_IMAGE') != '' else  ''} \
                                  ${@'${TEGRA_ESP_IMAGE}:do_image_complete' if d.getVar('TEGRA_ESP_IMAGE') != '' else  ''} \
-                                 virtual/secure-os:do_deploy ${TEGRA_SIGNING_EXTRA_DEPS} ${DTB_EXTRA_DEPS} \
+                                 virtual/secure-os:do_deploy ${TEGRA_SIGNING_EXTRA_DEPS} ${TEGRA_SIGNING_PKCS11_DEPS} ${DTB_EXTRA_DEPS} \
                                  ${@'${TEGRAFLASH_INITRD_FLASH_IMAGE}:do_image_complete' if d.getVar('TEGRAFLASH_INITRD_FLASH_IMAGE') != '' else ''}"
 IMAGE_TYPEDEP:tegraflash-tar += "${IMAGE_TEGRAFLASH_FS_TYPE}"
 CONVERSION_CMD:simg = "tegra_mksparse ${IMAGE_NAME}.${type} ${IMAGE_NAME}.${type}.simg"

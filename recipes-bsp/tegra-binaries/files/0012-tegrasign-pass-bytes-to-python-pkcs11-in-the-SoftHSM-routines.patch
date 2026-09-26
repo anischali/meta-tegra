@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anis Chali <anis.chali@ro-main.com>
+Date: Sat, 26 Sep 2026 15:07:48 +0200
+Subject: [PATCH] tegrasign: pass bytes to python-pkcs11 in the SoftHSM
+ routines
+
+tegrasign reads the images to sign into bytearray objects, and the
+SoftHSM routines hand those buffers straight to python-pkcs11's
+digest(), sign() and encrypt(). python-pkcs11 only processes bytes
+and str values as a single buffer: any other value is iterated as a
+stream of chunks, so a bytearray yields ints and the operation fails
+with "TypeError: expected bytes, int found". tegrasign reports this
+as "[HSM] Error in rsa pss signing" and returns no signature, which
+makes every --hsm signing operation fail.
+
+Convert the buffers to bytes before passing them to python-pkcs11.
+
+Upstream-Status: Pending
+Signed-off-by: Anis Chali <anis.chali@ro-main.com>
+---
+ bootloader/tegrasign_v3_softhsm.py | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/bootloader/tegrasign_v3_softhsm.py b/bootloader/tegrasign_v3_softhsm.py
+index d332d75044a3..387b42370942 100755
+--- a/bootloader/tegrasign_v3_softhsm.py
++++ b/bootloader/tegrasign_v3_softhsm.py
+@@ -413,7 +413,7 @@ def do_hmac_sha256_hsm(buf, p_key, use_der_key = False):
+             })
+             hmac_key = session.get_key(label=hsm_hmac_label, \
+                                        key_type=pkcs11.KeyType.GENERIC_SECRET)
+-            hmac = hmac_key.sign(buf, mechanism=pkcs11.Mechanism.SHA256_HMAC)
++            hmac = hmac_key.sign(bytes(buf), mechanism=pkcs11.Mechanism.SHA256_HMAC)
+         return hmac
+ 
+     except Exception as e:
+@@ -510,7 +510,7 @@ def do_aes_cbc_hsm(buf, iv, p_key):
+                     pkcs11.Attribute.SIGN: True
+                 })
+             key = session.get_key(label=key_label, key_type=pkcs11.KeyType.AES)
+-            cbc = key.encrypt(buf, mechanism=pkcs11.Mechanism.AES_CBC, mechanism_param=iv)
++            cbc = key.encrypt(bytes(buf), mechanism=pkcs11.Mechanism.AES_CBC, mechanism_param=iv)
+         return cbc
+ 
+     except Exception as e:
+@@ -534,7 +534,7 @@ def do_aes_cmac_hsm(buf, p_key):
+         token = lib.get_token(token_label=hsm_token_label)
+         with token.open(user_pin=hsm_user_pin) as session:
+             key = session.get_key(label=p_key.hsm.get_type(), key_type=pkcs11.KeyType.AES)
+-            cmac = key.sign(buf, mechanism=pkcs11.Mechanism.AES_CMAC)
++            cmac = key.sign(bytes(buf), mechanism=pkcs11.Mechanism.AES_CMAC)
+         return cmac
+ 
+     except Exception as e:
+@@ -561,7 +561,7 @@ def do_rsa_pss_hsm(buf, p_key):
+         lib = pkcs11.lib(hsm_lib_path)
+         token = lib.get_token(token_label=hsm_token_label)
+         with token.open(user_pin=hsm_user_pin) as session:
+-            hash_data = session.digest(buf, mechanism=sha_mechanism)
++            hash_data = session.digest(bytes(buf), mechanism=sha_mechanism)
+             key_label = p_key.hsm.l4t_key_label
+             private_key = session.get_key(label=key_label, key_type=pkcs11.KeyType.RSA, \
+                                           object_class=pkcs11.ObjectClass.PRIVATE_KEY)
+@@ -1137,7 +1137,7 @@ def send_to_hsm_server_hmacsha(plain_text_buf, key_id):
+             })
+             hmac_sha_key = session.get_key(label=temp_label, \
+                                            key_type=pkcs11.KeyType.GENERIC_SECRET)
+-            hmac = hmac_sha_key.sign(plain_text_buf, mechanism=pkcs11.Mechanism.SHA256_HMAC)
++            hmac = hmac_sha_key.sign(bytes(plain_text_buf), mechanism=pkcs11.Mechanism.SHA256_HMAC)
+ 
+         return True, hmac
+ 
+@@ -1423,7 +1423,7 @@ def do_ecc_hsm(buf, p_key):
+         token = lib.get_token(token_label=hsm_token_label)
+         with token.open(user_pin=hsm_user_pin) as session:
+             # Calculate hash of the data first
+-            hash_data = session.digest(buf, mechanism=sha_mechanism)
++            hash_data = session.digest(bytes(buf), mechanism=sha_mechanism)
+ 
+             # Get the ECC private key from HSM
+             key_label = p_key.hsm.l4t_key_label

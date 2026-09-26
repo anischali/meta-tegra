@@ -75,3 +75,36 @@ For example to allow downgrading to L4T 36.4.3 add the following line to your ma
 ```
 TEGRA_UEFI_LOWEST_SUPPORTED_VERSION = "0x00240403"
 ```
+
+## Capsule signing keys
+
+UEFI checks the PKCS7 signature on each capsule against a trusted root certificate built into the firmware. By
+default, both the firmware and the `tegra-uefi-capsules` recipe use the EDK2 test certificates, whose private keys
+are public, so **any** capsule signed with those keys is accepted. Production builds must use their own certificates.
+
+Set `TEGRA_UEFI_CAPSULE_TRUSTED_CERT` in your machine or distro configuration to your root certificate. The
+`edk2-firmware-tegra` recipe then builds it into the firmware as the capsule trust anchor, and the `tegra-uefi-capsules`
+recipe uses it as the trusted certificate when signing, so the two always match. Then point the signing variables at
+your own signer certificate and intermediate certificate:
+```
+TEGRA_UEFI_CAPSULE_TRUSTED_CERT = "/path/to/capsule-root.pem"
+UEFI_CAPSULE_SIGNER_PRIVATE_CERT = "/path/to/capsule-signer.pem"
+UEFI_CAPSULE_OTHER_PUBLIC_CERT = "/path/to/capsule-intermediate.pem"
+```
+`UEFI_CAPSULE_SIGNER_PRIVATE_CERT` holds both the signer certificate and its private key, unless the key is given
+separately in `UEFI_CAPSULE_SIGNER_PRIVATE_KEY`.
+
+### Keys and certificates held in an HSM (PKCS#11)
+
+Each of the variables above, and `UEFI_CAPSULE_SIGNER_PRIVATE_KEY`, also accepts a
+[PKCS#11 URI](https://www.rfc-editor.org/rfc/rfc7512). Certificates are exported from the token during the build,
+and the signer private key never leaves it:
+```
+TEGRA_UEFI_CAPSULE_TRUSTED_CERT = "pkcs11:token=my-token;object=capsule-root;type=cert"
+UEFI_CAPSULE_SIGNER_PRIVATE_CERT = "pkcs11:token=my-token;object=capsule-signer;type=cert"
+UEFI_CAPSULE_SIGNER_PRIVATE_KEY = "pkcs11:token=my-token;object=capsule-signer;type=private?pin-source=file:/path/to/pin.txt"
+```
+PKCS#11 URIs are resolved by OpenSSL, which needs a provider for them, such as
+[pkcs11-provider](https://github.com/latchset/pkcs11-provider). Export `OPENSSL_CONF` to the build, pointing at an
+OpenSSL configuration file that loads the provider and your PKCS#11 module. Prefer `pin-source` to `pin-value`
+in the URIs, since a PIN given directly appears in the task scripts of the build.
