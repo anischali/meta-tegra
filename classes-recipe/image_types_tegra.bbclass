@@ -42,58 +42,53 @@ def tegra_bootcontrol_overlay_list(d, bup=False, separator=','):
             overlays.append('UefiUpdateSecurityKeys.dtbo')
     return separator.join(overlays)
 
+# A PKCS#11 URI per RFC 7512; no separate module needed to detect one.
+def tegra_signing_is_uri(value):
+    return bool(value) and value.startswith('pkcs11:')
+
 def tegra_signing_filechecksums(d):
     files = []
     # PKCS#11 URIs name token objects, not local files that can be tracked
-    if d.getVar('TEGRA_SIGNING_PKC') and not oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_PKC')):
+    if d.getVar('TEGRA_SIGNING_PKC') and not tegra_signing_is_uri(d.getVar('TEGRA_SIGNING_PKC')):
         files.append('${TEGRA_SIGNING_PKC}')
-    if d.getVar('TEGRA_SIGNING_SBK') and not oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_SBK')):
+    if d.getVar('TEGRA_SIGNING_SBK') and not tegra_signing_is_uri(d.getVar('TEGRA_SIGNING_SBK')):
         files.append('${TEGRA_SIGNING_SBK}')
     if len(files) == 0:
         return ''
     return ' '.join([f + ':True' for f in files])
 
 def tegra_signing_uses_pkcs11(d):
-    return oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_PKC')) or oe4t.pkcs11.is_uri(d.getVar('TEGRA_SIGNING_SBK'))
+    return tegra_signing_is_uri(d.getVar('TEGRA_SIGNING_PKC')) or tegra_signing_is_uri(d.getVar('TEGRA_SIGNING_SBK'))
 
-# With --hsm, tegraflash does not use the --key/--encrypt_key values for
-# signing: tegrasign looks up the "PKC" and "SBK" objects on the token
-# described by the TEGRASIGN_HSM_* variables exported below. The URIs are
-# still passed along, since the flash helper requires -u with --hsm, but
-# with the PIN stripped, as NVIDIA's scripts echo their command lines.
-def tegra_signing_pkcs11_args(d):
-    import bb
-
-    args = ' --hsm'
-    for var, opt in [('TEGRA_SIGNING_PKC', '-u'), ('TEGRA_SIGNING_SBK', '-v')]:
-        value = d.getVar(var)
-        if not value:
-            if var == 'TEGRA_SIGNING_PKC':
-                bb.fatal("TEGRA_SIGNING_SBK is a PKCS#11 URI, so TEGRA_SIGNING_PKC must be one too")
-            continue
-        if not oe4t.pkcs11.is_uri(value):
-            bb.fatal("%s must be a PKCS#11 URI: HSM signing applies to both the PKC and SBK keys" % var)
-        oe4t.pkcs11.check_uri(d, var)
-        args += " %s '%s'" % (opt, oe4t.pkcs11.without_pin(value))
-    return args
-
+# PKC and SBK are independent: either, both, or neither may be a PKCS#11
+# URI, so file-based and HSM-based keys can be mixed in one build. With
+# --hsm, tegraflash does not use a URI's -u/-v value for signing: tegrasign
+# looks up the "PKC"/"SBK" objects on the token via the PKCS11_MODULE_PATH/
+# PKCS11_TOKEN_LABEL/PKCS11_PIN environment variables instead (see the
+# tegra-flashtools patches). The URI is still passed, since the flash
+# helper requires -u with --hsm. --hsm is only added when at least one key
+# is a URI.
 def tegra_signing_args(d):
     import os
     import bb
 
-    if tegra_signing_uses_pkcs11(d):
-        return tegra_signing_pkcs11_args(d)
     args = ''
-    pkc = d.getVar('TEGRA_SIGNING_PKC')
-    if pkc:
-        if not os.path.exists(pkc):
-            bb.fatal("Signing file does not exist: %s" % pkc)
-        args += ' -u ${TEGRA_SIGNING_PKC}'
-    sbk = d.getVar('TEGRA_SIGNING_SBK')
-    if sbk:
-        if not os.path.exists(sbk):
-            bb.fatal("Signing file does not exist: %s" % sbk)
-        args += ' -v ${TEGRA_SIGNING_SBK}'
+    needs_hsm = False
+    for var, opt in [('TEGRA_SIGNING_PKC', '-u'), ('TEGRA_SIGNING_SBK', '-v')]:
+        value = d.getVar(var)
+        if not value:
+            continue
+        if tegra_signing_is_uri(value):
+            if "'" in value or '\n' in value:
+                bb.fatal("%s: PKCS#11 URI must not contain a quote or newline; percent-encode it instead" % var)
+            needs_hsm = True
+            args += " %s '%s'" % (opt, value)
+        else:
+            if not os.path.exists(value):
+                bb.fatal("Signing file does not exist: %s" % value)
+            args += " %s '%s'" % (opt, value)
+    if needs_hsm:
+        args = ' --hsm' + args
     return args
 
 IMAGE_ROOTFS_SIZE ?= "${@tegra_default_rootfs_size(d)}"
@@ -110,19 +105,11 @@ TEGRA_SIGNING_ENV ??= ""
 TEGRA_SIGNING_EXCLUDE_TOOLS ??= ""
 TEGRA_SIGNING_EXTRA_DEPS ??= ""
 
-# PKCS#11 token settings read by tegrasign_v3_softhsm.py (see the
-# tegra-flashtools patches), defaulted from TEGRA_SIGNING_PKC's module-path,
-# token, pin-value and pin-source attributes when it is a pkcs11: URI, and
-# overridable directly. Left out of task signatures like the key settings,
-# so the PIN never ends up in sstate metadata.
-export TEGRASIGN_HSM_LIB_PATH ??= "${@oe4t.pkcs11.uri_attr(d, 'TEGRA_SIGNING_PKC', 'module-path')}"
-TEGRASIGN_HSM_LIB_PATH[vardepvalue] = ""
-export TEGRASIGN_HSM_TOKEN_LABEL ??= "${@oe4t.pkcs11.uri_attr(d, 'TEGRA_SIGNING_PKC', 'token')}"
-TEGRASIGN_HSM_TOKEN_LABEL[vardepvalue] = ""
-export TEGRASIGN_HSM_USER_PIN ??= "${@oe4t.pkcs11.uri_attr(d, 'TEGRA_SIGNING_PKC', 'pin-value')}"
-TEGRASIGN_HSM_USER_PIN[vardepvalue] = ""
-export TEGRASIGN_HSM_USER_PIN_FILE ??= "${@oe4t.pkcs11.pin_file(d, 'TEGRA_SIGNING_PKC')}"
-TEGRASIGN_HSM_USER_PIN_FILE[vardepvalue] = ""
+# tegrasign_v3_softhsm.py (see the tegra-flashtools patches) reads its own
+# PKCS#11 module/token/PIN from TEGRASIGN_HSM_* environment variables, with
+# its own built-in fallback defaults - set them directly in your own
+# configuration if you need something other than those defaults, the same
+# way you'd set any other build-time export.
 TEGRA_SIGNING_PKCS11_DEPS = "${@'python3-pkcs11-native:do_populate_sysroot python3-cryptography-native:do_populate_sysroot' if tegra_signing_uses_pkcs11(d) else ''}"
 # tegrasign's HSM module imports python3-cryptography, which fails to
 # load if OpenSSL's legacy provider can't be found; it isn't needed there.

@@ -15,6 +15,7 @@ SRC_URI = "\
     file://0010-odmsign-quote-key-arguments-before-eval.patch \
     file://0011-l4t_bup_gen-accept-PKCS-11-URIs-as-key-arguments.patch \
     file://0012-tegrasign-pass-bytes-to-python-pkcs11-in-the-SoftHSM-routines.patch \
+    file://0013-tegrasign_v3_softhsm-use-pkcs11-lib-for-aes-gcm.patch \
 "
 SRC_URI[sha256sum] = "2e5619088ba88e85dab25247f033d70659b6f676ff835176a07766dcb0fdbe6b"
 
