@@ -18,13 +18,18 @@ connection fails, hsm_get_pkc_key_type() returns None, and the error
 path then does 'string' + None, raising an unrelated TypeError instead
 of the intended tegrasign_exception with a readable message.
 
+Apply both changes to the unified_flash copies of these scripts as
+well, since they are installed and used for flashing too.
+
 Upstream-Status: Pending
 
 Signed-off-by: Anis Chali <anis.chali@ro-main.com>
 ---
- bootloader/tegrasign_v3_softhsm.py | 6 +++---
- bootloader/tegrasign_v3_util.py    | 2 +-
- 2 files changed, 4 insertions(+), 4 deletions(-)
+ bootloader/tegrasign_v3_softhsm.py                            | 6 +++---
+ bootloader/tegrasign_v3_util.py                               | 2 +-
+ unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py | 6 +++---
+ unified_flash/tools/flashtools/flash/tegrasign_v3_util.py    | 2 +-
+ 4 files changed, 8 insertions(+), 8 deletions(-)
 
 diff --git a/bootloader/tegrasign_v3_softhsm.py b/bootloader/tegrasign_v3_softhsm.py
 index 8f5dc05d4d33..d332d75044a3 100755
@@ -47,6 +52,36 @@ diff --git a/bootloader/tegrasign_v3_util.py b/bootloader/tegrasign_v3_util.py
 index a23ff36b42ea..408a5f2ce5f5 100755
 --- a/bootloader/tegrasign_v3_util.py
 +++ b/bootloader/tegrasign_v3_util.py
+@@ -228,7 +228,7 @@ class HSM:
+                 elif pkc_key_type == 'ECC521':
+                     self.type = KeyType.ECC521
+                 else:
+-                    raise tegrasign_exception('Unknown HSM PKC key type: ' + pkc_key_type)
++                    raise tegrasign_exception('Unknown HSM PKC key type: ' + str(pkc_key_type))
+             elif 'ALGO' in arg:
+                 self.algo_only = True
+             elif 'REVOKE' in arg:
+diff --git a/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py b/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py
+index 8f5dc05..81cc09b 100755
+--- a/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py
++++ b/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py
+@@ -93,9 +93,9 @@ hsm_user_pin = "1234" # The user pin number to access the token and the keys.
+ '''
+ 
+ # These are env setup variables for SoftHSM connection
+-hsm_token_label = "HSM"
+-hsm_lib_path = "/usr/lib/softhsm/libsofthsm2.so"
+-hsm_user_pin = "1234"
++hsm_token_label = os.environ.get('PKCS11_TOKEN_LABEL', "HSM")
++hsm_lib_path = os.environ.get('PKCS11_MODULE_PATH', "/usr/lib/softhsm/libsofthsm2.so")
++hsm_user_pin = os.environ.get('PKCS11_PIN', "1234")
+ 
+ # DER encoding related constants
+ DER_OCTET_STRING_TAG = 0x04
+diff --git a/unified_flash/tools/flashtools/flash/tegrasign_v3_util.py b/unified_flash/tools/flashtools/flash/tegrasign_v3_util.py
+index a23ff36..408a5f2 100755
+--- a/unified_flash/tools/flashtools/flash/tegrasign_v3_util.py
++++ b/unified_flash/tools/flashtools/flash/tegrasign_v3_util.py
 @@ -228,7 +228,7 @@ class HSM:
                  elif pkc_key_type == 'ECC521':
                      self.type = KeyType.ECC521

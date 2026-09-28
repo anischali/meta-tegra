@@ -35,6 +35,9 @@ allow this, so read out the raw key value and perform AES-GCM in
 software via `cryptography`'s AESGCM instead of asking the token to
 do it.
 
+Apply the same change to the unified_flash copy of the script, which
+is installed and used for flashing too.
+
 Upstream-Status: Pending
 Signed-off-by: Anis Chali <anis.chali@ro-main.com>
 
@@ -49,6 +52,203 @@ Signed-off-by: Anis Chali <anis.chali@ro-main.com>
  import ctypes
  import os
 @@ -122,168 +123,22 @@
+ 
+ # Crypto function
+ def aes_gcm_hsm(key_label, iv, aad, plaintext):
+-    # Load the PKCS#11 library
+-    pkcs11 = ctypes.CDLL(hsm_lib_path)
+-
+-    # Define constants
+-    CKR_OK = 0
+-    CKF_SERIAL_SESSION = 0x00000004
+-    CKF_RW_SESSION = 0x00000002
+-    CKU_USER = 1
+-    CKK_AES = 0x0000001F
+-    CKO_SECRET_KEY = 0x00000004
+-    CKM_AES_GCM = 0x00001087
+-
+-    class CK_SESSION_HANDLE(ctypes.Structure):
+-        _fields_ = [("handle", ctypes.c_ulong)]
+-
+-    class CK_MECHANISM(ctypes.Structure):
+-        _fields_ = [("mechanism", ctypes.c_ulong), ("pParameter", ctypes.c_void_p), ("ulParameterLen", ctypes.c_ulong)]
+-
+-    class CK_GCM_PARAMS(ctypes.Structure):
+-        _fields_ = [("pIv", ctypes.POINTER(ctypes.c_ubyte)), ("ulIvLen", ctypes.c_ulong), ("ulIvBits", ctypes.c_ulong),
+-                    ("pAAD", ctypes.POINTER(ctypes.c_ubyte)), ("ulAADLen", ctypes.c_ulong), ("ulTagBits", ctypes.c_ulong)]
+-
+-    class CK_ATTRIBUTE(ctypes.Structure):
+-        _fields_ = [("type", ctypes.c_ulong), ("pValue", ctypes.c_void_p), ("ulValueLen", ctypes.c_ulong)]
+-
+-    class CK_TOKEN_INFO(ctypes.Structure):
+-        _fields_ = [
+-            ("label", ctypes.c_char * 32),
+-            ("manufacturerID", ctypes.c_char * 32),
+-            ("model", ctypes.c_char * 16),
+-            ("serialNumber", ctypes.c_char * 16),
+-            ("flags", ctypes.c_ulong),
+-            ("ulMaxSessionCount", ctypes.c_ulong),
+-            ("ulSessionCount", ctypes.c_ulong),
+-            ("ulMaxRwSessionCount", ctypes.c_ulong),
+-            ("ulRwSessionCount", ctypes.c_ulong),
+-            ("ulMaxPinLen", ctypes.c_ulong),
+-            ("ulMinPinLen", ctypes.c_ulong),
+-            ("ulTotalPublicMemory", ctypes.c_ulong),
+-            ("ulFreePublicMemory", ctypes.c_ulong),
+-            ("ulTotalPrivateMemory", ctypes.c_ulong),
+-            ("ulFreePrivateMemory", ctypes.c_ulong),
+-            ("hardwareVersion", ctypes.c_ubyte * 2),
+-            ("firmwareVersion", ctypes.c_ubyte * 2),
+-            ("utcTime", ctypes.c_char * 16)
+-        ]
+-
+-    # Initialize the library
+-    pkcs11.C_Initialize(None)
+-
+-    # Find key slot with token name
+-    slot_list = (ctypes.c_ulong * 256)() # Assume there are at most 256 slots
+-    slot_count = ctypes.c_ulong(len(slot_list))
+-    pkcs11.C_GetSlotList(True, slot_list, ctypes.byref(slot_count))
+-
+-    # Search key slot by token name
+-    token_name = hsm_token_label
+-    for slot in slot_list[:slot_count.value]:
+-        token_info = CK_TOKEN_INFO()
+-        pkcs11.C_GetTokenInfo(slot, ctypes.byref(token_info))
+-        if token_info.label.decode('utf-8').strip() == token_name:
+-            slot_num = slot
+-            break
+-
+-    # Open a session with the token
+-    session = CK_SESSION_HANDLE()
+-    ret = pkcs11.C_OpenSession(slot_num, CKF_SERIAL_SESSION | CKF_RW_SESSION, None, None, ctypes.byref(session))
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to open session: {ret}")
+-
+-    # Login to the session
+-    ret = pkcs11.C_Login(session, CKU_USER, bytes(hsm_user_pin, 'utf-8'), len(bytes(hsm_user_pin, 'utf-8')))
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to login: {ret}")
+-
+-    # Prepare the search template
+-    label = bytes(key_label, 'utf-8')
+-    label_attr = CK_ATTRIBUTE(
+-        type=0x00000003,  # CKA_LABEL
+-        pValue=ctypes.cast(ctypes.create_string_buffer(label), ctypes.c_void_p),
+-        ulValueLen=len(label)
+-    )
+-
+-    key = ctypes.c_ulong()
+-
+-    # Find the AES key
+-    ret = pkcs11.C_FindObjectsInit(session, ctypes.byref(label_attr), 1)
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to find object init: {ret}")
+-    ret = pkcs11.C_FindObjects(session, ctypes.byref(key), 1, ctypes.byref(ctypes.c_ulong(1)))
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to find object: {ret}")
+-    ret = pkcs11.C_FindObjectsFinal(session)
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to find object final: {ret}")
+-
+-    # Debug code to get key value **************
+-    CKA_VALUE = 0x00000011  # CKA_VALUE constant
+-
+-    # Prepare the attribute to hold the value
+-    value_len = ctypes.c_ulong(0)
+-
+-    # First, get the size of the key value
+-    value_attr = CK_ATTRIBUTE(type=CKA_VALUE, pValue=None, ulValueLen=0)
+-    ret = pkcs11.C_GetAttributeValue(session, key, ctypes.byref(value_attr), 1)
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to get attribute size: {ret}")
+-
+-    # Allocate buffer to hold the key value
+-    buffer = ctypes.create_string_buffer(value_attr.ulValueLen)
+-
+-    # Set the attribute to retrieve the key value
+-    value_attr.pValue = ctypes.cast(buffer, ctypes.c_void_p)
+-    value_attr.ulValueLen = len(buffer)
+-
+-    # Get the key value
+-    ret = pkcs11.C_GetAttributeValue(session, key, ctypes.byref(value_attr), 1)
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Failed to get key value: {ret}")
+-
+-    # Prepare GCM parameters
+-    iv_len = int(len(iv)/2)
+-    aad_len = int(len(aad)/2)
+-    iv_buffer = (ctypes.c_ubyte * iv_len).from_buffer_copy(bytes.fromhex(iv))
+-    aad_buffer = (ctypes.c_ubyte * aad_len).from_buffer_copy(bytes.fromhex(aad))
+-    gcm_params = CK_GCM_PARAMS(
+-        pIv=ctypes.cast(iv_buffer, ctypes.POINTER(ctypes.c_ubyte)),
+-        ulIvLen=iv_len,
+-        ulIvBits=iv_len * 8,
+-        pAAD=ctypes.cast(aad_buffer, ctypes.POINTER(ctypes.c_ubyte)),
+-        ulAADLen=aad_len,
+-        ulTagBits=128
+-    )
+-
+-    mechanism = CK_MECHANISM(CKM_AES_GCM, ctypes.cast(ctypes.byref(gcm_params), ctypes.c_void_p), ctypes.sizeof(gcm_params))
+-
+-    # Perform AES-GCM encryption
+-    ciphertext_len = ctypes.c_ulong()
+-
+-    ret = pkcs11.C_EncryptInit(session, ctypes.byref(mechanism), key)
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"EncryptionInit failed with code: {ret}")
+-
+-    # Get ciphertext length
+-    ret = pkcs11.C_Encrypt(session, bytes(plaintext), len(plaintext), None, ctypes.byref(ciphertext_len))
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Encryption failed with code: {ret}")
+-
+-    ciphertext = ctypes.create_string_buffer(ciphertext_len.value)
+-
+-    # Performa AES GCM encryption
+-    ret = pkcs11.C_Encrypt(session, bytes(plaintext), len(plaintext), ciphertext, ctypes.byref(ciphertext_len))
+-    if ret != CKR_OK:
+-        raise RuntimeError(f"Encryption failed with code: {ret}")
+-
+-    # Extract the tag from the end of ciphertext
+-    tag = ciphertext.raw[-16:]
+-    encrypted_content = ciphertext.raw[:-16]
+-
+-    # Logout and close the session
+-    pkcs11.C_Logout(session)
+-    pkcs11.C_CloseSession(session)
++    # This PKCS#11 backend does not implement CKM_AES_GCM (its C_GetMechanismList only
++    # advertises AES_KEY_GEN/AES_ECB for AES, no CBC/CMAC/GCM), so the token can't do
++    # this operation itself. The derived key is stored EXTRACTABLE=True, SENSITIVE=False
++    # for exactly this reason (see hsm_server_store_derived_key_to_key_database), so
++    # pull the raw key value out and perform AES-GCM in software instead.
++    lib = pkcs11.lib(hsm_lib_path)
++    token = lib.get_token(token_label=hsm_token_label)
++    with token.open(user_pin=hsm_user_pin) as session:
++        key = session.get_key(label=key_label)
++        key_value = key[pkcs11.Attribute.VALUE]
++
++    ciphertext = AESGCM(key_value).encrypt(bytes.fromhex(iv), bytes(plaintext), bytes.fromhex(aad))
++
++    # AESGCM.encrypt() returns ciphertext || tag, with a 128-bit (16 byte) tag
++    tag = ciphertext[-16:]
++    encrypted_content = ciphertext[:-16]
+     return encrypted_content, tag.hex()
+ 
+ 
+diff --git a/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py b/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py
+index 2654546..149930d 100755
+--- a/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py
++++ b/unified_flash/tools/flashtools/flash/tegrasign_v3_softhsm.py
+@@ -14,6 +14,7 @@ import pkcs11
+ from pkcs11.util.rsa import encode_rsa_public_key
+ from cryptography.hazmat.primitives.asymmetric import rsa
+ from cryptography.hazmat.primitives import serialization
++from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+ from cryptography.hazmat.backends import default_backend
+ import ctypes
+ import os
+@@ -123,168 +124,22 @@ SUPPORTED_CURVES = {
  
  # Crypto function
  def aes_gcm_hsm(key_label, iv, aad, plaintext):

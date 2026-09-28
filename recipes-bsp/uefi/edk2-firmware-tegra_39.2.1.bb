@@ -49,22 +49,15 @@ do_patch[postfuncs] += "${@'fix_boot_timeout' if bb.utils.to_boolean(d.getVar('T
 # When TEGRA_UEFI_CAPSULE_TRUSTED_CERT is set, UEFI trusts that root
 # certificate for capsule signatures instead of the EDK2 test certificate.
 TEGRA_UEFI_CAPSULE_TRUSTED_CERT ??= ""
-TEGRA_UEFI_CAPSULE_TRUSTED_CERT[vardepvalue] = "${@oe4t.pkcs11.redact(d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT'))}"
 DEPENDS += "${@'openssl-native' if d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT') else ''}"
 
 def tegra_fmp_trusted_cert_checksums(d):
     cert = d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT')
-    if not cert or oe4t.pkcs11.is_uri(cert):
+    if not cert or cert.startswith('pkcs11:'):
         return ''
     return '${TEGRA_UEFI_CAPSULE_TRUSTED_CERT}:True'
 
 do_configure[file-checksums] += "${@tegra_fmp_trusted_cert_checksums(d)}"
-
-python () {
-    # The value is placed in single quotes in tegra_fmp_trusted_cert_config
-    if oe4t.pkcs11.is_uri(d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT')):
-        oe4t.pkcs11.check_uri(d, 'TEGRA_UEFI_CAPSULE_TRUSTED_CERT')
-}
 
 # Converts TEGRA_UEFI_CAPSULE_TRUSTED_CERT, a PEM file or a PKCS#11 URI,
 # into the PCD include file for the FMP PKCS7 certificate buffer, and

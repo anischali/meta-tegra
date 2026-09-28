@@ -17,20 +17,6 @@ UEFI_CAPSULE_TRUSTED_PUBLIC_CERT ?= "${@d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CER
 UEFI_CAPSULE_SIGNER_PRIVATE_KEY ?= ""
 UEFI_CAPSULE_CERTS_DIR = "${B}/uefi-capsule-certs"
 
-# Keep any PKCS#11 PIN out of task signatures
-UEFI_CAPSULE_SIGNER_PRIVATE_CERT[vardepvalue] = "${@oe4t.pkcs11.redact(d.getVar('UEFI_CAPSULE_SIGNER_PRIVATE_CERT'))}"
-UEFI_CAPSULE_OTHER_PUBLIC_CERT[vardepvalue] = "${@oe4t.pkcs11.redact(d.getVar('UEFI_CAPSULE_OTHER_PUBLIC_CERT'))}"
-UEFI_CAPSULE_TRUSTED_PUBLIC_CERT[vardepvalue] = "${@oe4t.pkcs11.redact(d.getVar('UEFI_CAPSULE_TRUSTED_PUBLIC_CERT'))}"
-UEFI_CAPSULE_SIGNER_PRIVATE_KEY[vardepvalue] = "${@oe4t.pkcs11.redact(d.getVar('UEFI_CAPSULE_SIGNER_PRIVATE_KEY'))}"
-
-python () {
-    # The values below are placed in single quotes in sign_uefi_capsules
-    for var in ['UEFI_CAPSULE_SIGNER_PRIVATE_CERT', 'UEFI_CAPSULE_OTHER_PUBLIC_CERT',
-                'UEFI_CAPSULE_TRUSTED_PUBLIC_CERT', 'UEFI_CAPSULE_SIGNER_PRIVATE_KEY']:
-        if oe4t.pkcs11.is_uri(d.getVar(var)):
-            oe4t.pkcs11.check_uri(d, var)
-}
-
 # Prints the name of a PEM file holding the certificate given as $1,
 # which is either a file name, returned as is, or a PKCS#11 URI, in which
 # case the certificate is exported from the token to a file named $2.pem.
