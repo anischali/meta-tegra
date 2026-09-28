@@ -146,6 +146,6 @@ do_compile[depends] += "${TEGRA_SIGNING_EXTRA_DEPS} ${TEGRA_SIGNING_PKCS11_DEPS}
 # BUP and capsule signing may reach a PKCS#11 token over the network
 def tegra_uefi_capsules_need_network(d):
     capsule_vars = ['UEFI_CAPSULE_SIGNER_PRIVATE_CERT', 'UEFI_CAPSULE_OTHER_PUBLIC_CERT',
-                    'UEFI_CAPSULE_TRUSTED_PUBLIC_CERT', 'UEFI_CAPSULE_SIGNER_PRIVATE_KEY']
+                    'UEFI_CAPSULE_TRUSTED_PUBLIC_CERT']
     return tegra_signing_uses_pkcs11(d) or any(tegra_signing_is_uri(d.getVar(v)) for v in capsule_vars)
 do_compile[network] = "${@'1' if tegra_uefi_capsules_need_network(d) else '0'}"

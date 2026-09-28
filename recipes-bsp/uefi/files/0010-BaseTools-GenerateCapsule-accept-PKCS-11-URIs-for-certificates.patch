@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Anis Chali <anis.chali@ro-main.com>
+Date: Mon, 28 Sep 2026 15:28:35 -0500
+Subject: [PATCH] BaseTools/GenerateCapsule: accept PKCS#11 URIs for
+ certificates
+
+--signer-private-cert, --other-public-cert and --trusted-public-cert
+only accept files, and the signer file must hold the private key
+along with the certificate. That rules out keys that can't be
+exported to a file, such as keys held in an HSM.
+
+Let each of these options also take a pkcs11: URI. The certificate
+is exported from the token object (type=cert) to a temporary PEM
+file. For the signer, the private key of the same object
+(type=private) is passed to openssl as -inkey, so it never leaves
+the token; it is resolved by an OpenSSL 3 provider for PKCS#11 URIs,
+such as pkcs11-provider. The URI is shell-quoted, since the command
+runs through the shell, and any PIN in it is masked in the verbose
+output. Files behave exactly as before.
+
+Upstream-Status: Pending
+Signed-off-by: Anis Chali <anis.chali@ro-main.com>
+---
+ .../Source/Python/Capsule/GenerateCapsule.py  | 111 +++++++++++++++---
+ 1 file changed, 96 insertions(+), 15 deletions(-)
+
+diff --git a/BaseTools/Source/Python/Capsule/GenerateCapsule.py b/BaseTools/Source/Python/Capsule/GenerateCapsule.py
+index fd3ee4a..a953cfe 100644
+--- a/BaseTools/Source/Python/Capsule/GenerateCapsule.py
++++ b/BaseTools/Source/Python/Capsule/GenerateCapsule.py
+@@ -26,6 +26,8 @@ import subprocess
+ import os
+ import tempfile
+ import shutil
++import re
++import shlex
+ import platform
+ import json
+ from Common.Uefi.Capsule.UefiCapsuleHeader import UefiCapsuleHeaderClass
+@@ -169,6 +171,49 @@ def VerifyPayloadSignTool (Payload, CertData, ToolPath, PfxFile, SubjectName, Ha
+     print ('signtool verify is not supported.')
+     raise ValueError ('GenerateCapsule: error: signtool verify is not supported.')
+ 
++class Pkcs11Uri:
++    #
++    # A pkcs11: URI given in place of a certificate file. Mimics the open
++    # file object argparse would return (.name, .close()) so the rest of the
++    # argument handling is unchanged.
++    #
++    def __init__ (self, Uri):
++        self.name = Uri
++    def close (self):
++        pass
++
++def OpenSslCertArgument (Value):
++    if Value.startswith ('pkcs11:'):
++        return Pkcs11Uri (Value)
++    return argparse.FileType ('rb') (Value)
++
++def IsPkcs11Uri (Value):
++    return Value is not None and Value.startswith ('pkcs11:')
++
++def Pkcs11UriWithType (Uri, ObjectType):
++    #
++    # Same token object, selected as certificate or private key
++    #
++    Path, Sep, Query = Uri.partition ('?')
++    Path = ';'.join ([Attr for Attr in Path.split (';') if not Attr.startswith ('type=')])
++    return Path + ';type=' + ObjectType + Sep + Query
++
++def Pkcs11CertToFile (Uri, ToolPath, TempDirectoryName, Name):
++    #
++    # Export the certificate held by the token object to a PEM file
++    #
++    OpenSsl = os.path.join (ToolPath or '', 'openssl')
++    CertFile = os.path.join (TempDirectoryName, Name + '.pem')
++    try:
++        Store = subprocess.run ([OpenSsl, 'storeutl', '-certs', Pkcs11UriWithType (Uri, 'cert')],
++                                stdout = subprocess.PIPE, stderr = subprocess.PIPE, check = True)
++        subprocess.run ([OpenSsl, 'x509', '-out', CertFile], input = Store.stdout,
++                        stdout = subprocess.PIPE, stderr = subprocess.PIPE, check = True)
++    except subprocess.CalledProcessError as Error:
++        print (Error.stderr.decode ())
++        raise ValueError ('GenerateCapsule: error: can not read certificate {Name} from PKCS#11 token.'.format (Name = Name))
++    return CertFile
++
+ def SignPayloadOpenSsl (Payload, ToolPath, SignerPrivateCertFile, OtherPublicCertFile, TrustedPublicCertFile, HashAlgorithm = DEFAULT_HASH_ALGORITHM, Verbose = False):
+     #
+     # Check the hash algorithm is supported
+@@ -183,19 +228,49 @@ def SignPayloadOpenSsl (Payload, ToolPath, SignerPrivateCertFile, OtherPublicCer
+     Command = ''
+     Command = Command + '"{Path}" '.format (Path = os.path.join (ToolPath, 'openssl'))
+     Command = Command + 'smime -sign -binary -outform DER -md {HashAlgorithm} '.format (HashAlgorithm = HashAlgorithm)
+-    Command = Command + '-signer "{Private}" -certfile "{Public}"'.format (Private = SignerPrivateCertFile, Public = OtherPublicCertFile)
+-    if Verbose:
+-        print (Command)
+ 
+     #
+-    # Sign the input file using the specified private key and capture signature from STDOUT
++    # pkcs11: URIs: the signer certificate is exported from the token and the
++    # private key stays on it (-inkey, resolved by the OpenSSL 3 pkcs11 provider)
+     #
++    TempDirectoryName = tempfile.mkdtemp ()
+     try:
+-        Process = subprocess.Popen (Command, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, shell = True)
+-        Result = Process.communicate(input = Payload)
+-        Signature = Result[0]
+-    except:
+-        raise ValueError ('GenerateCapsule: error: can not run openssl.')
++        SignerKey = None
++        if IsPkcs11Uri (SignerPrivateCertFile):
++            SignerKey = Pkcs11UriWithType (SignerPrivateCertFile, 'private')
++            SignerPrivateCertFile = Pkcs11CertToFile (SignerPrivateCertFile, ToolPath, TempDirectoryName, 'signer')
++        if IsPkcs11Uri (OtherPublicCertFile):
++            OtherPublicCertFile = Pkcs11CertToFile (OtherPublicCertFile, ToolPath, TempDirectoryName, 'other')
++
++        Command = Command + '-signer "{Private}" '.format (Private = SignerPrivateCertFile)
++        if SignerKey:
++            #
++            # The command runs through the shell, so quote the URI: it may
++            # contain shell metacharacters
++            #
++            if os.name == 'posix':
++                Key = shlex.quote (SignerKey)
++            else:
++                Key = '"{Key}"'.format (Key = SignerKey)
++            Command = Command + '-inkey {Key} '.format (Key = Key)
++        Command = Command + '-certfile "{Public}"'.format (Public = OtherPublicCertFile)
++        if Verbose:
++            #
++            # Do not leak a PIN given in the URI into the build log
++            #
++            print (re.sub (r'(pin-value=)[^;&\'" ]*', r'\1***', Command))
++
++        #
++        # Sign the input file using the specified private key and capture signature from STDOUT
++        #
++        try:
++            Process = subprocess.Popen (Command, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE, shell = True)
++            Result = Process.communicate(input = Payload)
++            Signature = Result[0]
++        except:
++            raise ValueError ('GenerateCapsule: error: can not run openssl.')
++    finally:
++        shutil.rmtree (TempDirectoryName)
+ 
+     if Process.returncode != 0:
+         print (Result[1].decode())
+@@ -232,6 +307,12 @@ def VerifyPayloadOpenSsl (Payload, CertData, ToolPath, SignerPrivateCertFile, Ot
+     Command = ''
+     Command = Command + '"{Path}" '.format (Path = os.path.join (ToolPath, 'openssl'))
+     Command = Command + 'smime -verify -inform DER '
++    if IsPkcs11Uri (TrustedPublicCertFile):
++        try:
++            TrustedPublicCertFile = Pkcs11CertToFile (TrustedPublicCertFile, ToolPath, TempDirectoryName, 'trusted')
++        except ValueError:
++            shutil.rmtree (TempDirectoryName)
++            raise
+     Command = Command + '-content {Content} -CAfile "{Public}"'.format (Content = TempFileName, Public = TrustedPublicCertFile)
+     if Verbose:
+         print (Command)
+@@ -1087,12 +1168,12 @@ if __name__ == '__main__':
+     parser.add_argument ("--subject-name", dest='SignToolSubjectName',
+                          help="signtool certificate subject name.")
+ 
+-    parser.add_argument ("--signer-private-cert", dest='OpenSslSignerPrivateCertFile', type=argparse.FileType('rb'),
+-                         help="OpenSSL signer private certificate filename.")
+-    parser.add_argument ("--other-public-cert", dest='OpenSslOtherPublicCertFile', type=argparse.FileType('rb'),
+-                         help="OpenSSL other public certificate filename.")
+-    parser.add_argument ("--trusted-public-cert", dest='OpenSslTrustedPublicCertFile', type=argparse.FileType('rb'),
+-                         help="OpenSSL trusted public certificate filename.")
++    parser.add_argument ("--signer-private-cert", dest='OpenSslSignerPrivateCertFile', type=OpenSslCertArgument,
++                         help="OpenSSL signer private certificate filename, or pkcs11: URI of a token object holding the certificate and private key.")
++    parser.add_argument ("--other-public-cert", dest='OpenSslOtherPublicCertFile', type=OpenSslCertArgument,
++                         help="OpenSSL other public certificate filename or pkcs11: URI.")
++    parser.add_argument ("--trusted-public-cert", dest='OpenSslTrustedPublicCertFile', type=OpenSslCertArgument,
++                         help="OpenSSL trusted public certificate filename or pkcs11: URI.")
+ 
+     parser.add_argument ("--signing-tool-path", dest = 'SigningToolPath',
+                          help = "Path to signtool or OpenSSL tool.  Optional if path to tools are already in PATH.")
+-- 
+2.53.0
+

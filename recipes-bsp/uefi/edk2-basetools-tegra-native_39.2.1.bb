@@ -8,7 +8,7 @@ LICENSE = "BSD-2-Clause-Patent"
 
 require edk2-firmware-core-tegra-39.2.1.inc
 
-SRC_URI += "file://0010-BaseTools-GenerateCapsule-add-signer-private-key-option.patch"
+SRC_URI += "file://0010-BaseTools-GenerateCapsule-accept-PKCS-11-URIs-for-certificates.patch"
 
 inherit_defer native
 

@@ -91,18 +91,17 @@ TEGRA_UEFI_CAPSULE_TRUSTED_CERT = "/path/to/capsule-root.pem"
 UEFI_CAPSULE_SIGNER_PRIVATE_CERT = "/path/to/capsule-signer.pem"
 UEFI_CAPSULE_OTHER_PUBLIC_CERT = "/path/to/capsule-intermediate.pem"
 ```
-`UEFI_CAPSULE_SIGNER_PRIVATE_CERT` holds both the signer certificate and its private key, unless the key is given
-separately in `UEFI_CAPSULE_SIGNER_PRIVATE_KEY`.
+`UEFI_CAPSULE_SIGNER_PRIVATE_CERT` holds both the signer certificate and its private key.
 
 ### Keys and certificates held in an HSM (PKCS#11)
 
-Each of the variables above, and `UEFI_CAPSULE_SIGNER_PRIVATE_KEY`, also accepts a
-[PKCS#11 URI](https://www.rfc-editor.org/rfc/rfc7512). Certificates are exported from the token during the build,
-and the signer private key never leaves it:
+Each of the variables above also accepts a [PKCS#11 URI](https://www.rfc-editor.org/rfc/rfc7512). Certificates are
+exported from the token during the build. For `UEFI_CAPSULE_SIGNER_PRIVATE_CERT`, the URI names the token object that
+holds both the signer certificate and its private key: the certificate is read from it, and the capsule is signed
+with its private key, which never leaves the token. Any `type=` attribute in that URI is ignored:
 ```
 TEGRA_UEFI_CAPSULE_TRUSTED_CERT = "pkcs11:token=my-token;object=capsule-root;type=cert"
-UEFI_CAPSULE_SIGNER_PRIVATE_CERT = "pkcs11:token=my-token;object=capsule-signer;type=cert"
-UEFI_CAPSULE_SIGNER_PRIVATE_KEY = "pkcs11:token=my-token;object=capsule-signer;type=private?pin-source=file:/path/to/pin.txt"
+UEFI_CAPSULE_SIGNER_PRIVATE_CERT = "pkcs11:token=my-token;object=capsule-signer?pin-source=file:/path/to/pin.txt"
 ```
 PKCS#11 URIs are resolved by OpenSSL, which needs a provider for them, such as
 [pkcs11-provider](https://github.com/latchset/pkcs11-provider). Export `OPENSSL_CONF` to the build, pointing at an
