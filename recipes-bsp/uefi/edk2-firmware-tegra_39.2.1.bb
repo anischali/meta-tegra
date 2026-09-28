@@ -58,6 +58,8 @@ def tegra_fmp_trusted_cert_checksums(d):
     return '${TEGRA_UEFI_CAPSULE_TRUSTED_CERT}:True'
 
 do_configure[file-checksums] += "${@tegra_fmp_trusted_cert_checksums(d)}"
+# Exporting the certificate from a PKCS#11 token may need network access
+do_configure[network] = "${@'1' if d.getVar('TEGRA_UEFI_CAPSULE_TRUSTED_CERT').startswith('pkcs11:') else '0'}"
 
 # Converts TEGRA_UEFI_CAPSULE_TRUSTED_CERT, a PEM file or a PKCS#11 URI,
 # into the PCD include file for the FMP PKCS7 certificate buffer, and

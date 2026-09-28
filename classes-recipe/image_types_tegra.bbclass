@@ -114,6 +114,10 @@ TEGRA_SIGNING_PKCS11_DEPS = "${@'python3-pkcs11-native:do_populate_sysroot pytho
 # tegrasign's HSM module imports python3-cryptography, which fails to
 # load if OpenSSL's legacy provider can't be found; it isn't needed there.
 export CRYPTOGRAPHY_OPENSSL_NO_LEGACY = "${@'1' if tegra_signing_uses_pkcs11(d) else ''}"
+# Tasks that sign with PKCS#11 keys may need to reach the token over the
+# network (e.g. through pkcs11-proxy on a TCP socket), which bitbake blocks
+# for tasks without the network flag. Set it on those tasks with this value.
+TEGRA_SIGNING_PKCS11_NETWORK = "${@'1' if tegra_signing_uses_pkcs11(d) else '0'}"
 
 DTB_EXTRA_DEPS ??= "${@tegra_dtb_extra_deps(d)}"
 EXTERNAL_KERNEL_DEVICETREE ??= "${@'${RECIPE_SYSROOT}/boot/devicetree' if d.getVar('PREFERRED_PROVIDER_virtual/dtb') else ''}"
@@ -545,6 +549,7 @@ END
 }
 create_tegraflash_pkg[vardepsexclude] += "DATETIME"
 do_image_tegraflash_tar[file-checksums] += "${TEGRA_SIGNING_FILECHECKSUMS}"
+do_image_tegraflash_tar[network] = "${TEGRA_SIGNING_PKCS11_NETWORK}"
 
 def tegraflash_bupgen_strip_cmd(d):
     images = d.getVar('TEGRA_BUPGEN_STRIP_IMG_NAMES').split()
